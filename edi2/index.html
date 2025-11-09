@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDI 2 Sticker Generator (v17)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: grid;
+            place-items: center;
+            min-height: 90vh;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        .container {
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 2rem 3rem;
+            width: 90%;
+            max-width: 500px;
+        }
+        h1 {
+            color: #1a535c;
+            text-align: center;
+            margin-top: 0;
+        }
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 1rem;
+            background-color: #1a535c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #4ecdc4;
+        }
+        button:disabled {
+            background-color: #c4c4c4;
+            cursor: not-allowed;
+        }
+        #status {
+            text-align: center;
+            margin-top: 1rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>EDI 2 Sticker Generator</h1>
+        
+        <div class="input-group">
+            <label for="fileUpload">1. Upload Packing List (.csv or .xlsx)</label>
+            <input type="file" id="fileUpload" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+        </div>
+
+        <button id="generateBtn" disabled>Generate PDF Stickers</button>
+        <div id="status">Please select a file.</div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileUpload');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusEl = document.getElementById('status');
+        
+        const HARDCODED_MEASUREMENTS = "24'' X 14'' X 8''";
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                generateBtn.disabled = false;
+                statusEl.textContent = `File selected: ${fileInput.files[0].name}`;
+            } else {
+                generateBtn.disabled = true;
+                statusEl.textContent = 'Please select a file.';
+            }
+        });
+
+        generateBtn.addEventListener('click', () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a file first.');
+                return;
+            }
+
+            statusEl.textContent = 'Processing file...';
+            
+            const fileName = file.name.toLowerCase();
+
+            try {
+                if (fileName.endsWith('.csv')) {
+                    Papa.parse(file, {
+                        complete: (results) => {
+                            generateStickers(results.data);
+                            statusEl.textContent = 'PDF Generated!';
+                        },
+                        error: (err) => { throw new Error(err.message); }
+                    });
+
+                } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        const dataArray = XLSX.utils.sheet_to_json(worksheet, {header: 1});
+                        
+                        generateStickers(dataArray);
+                        statusEl.textContent = 'PDF Generated!';
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    throw new Error("Unsupported file type. Please upload a .csv, .xls, or .xlsx file.");
+                }
+
+            } catch (error) {
+                console.error("Critical Processing Error:", error);
+                statusEl.textContent = `Error: Could not generate PDF. ${error.message}`;
+                alert(`Could not process file. Error: ${error.message}`);
+            }
+        });
+
+        function findValue(data, key, colOffset) {
+            for (let i = 0; i < data.length; i++) {
+                if (!data[i]) continue;
+                for (let j = 0; j < data[i].length; j++) {
+                    if (data[i][j] && data[i][j].toString().trim() === key.trim()) {
+                        return data[i][j + colOffset];
+                    }
+                }
+            }
+            return null;
+        }
+
+        function generateStickers(data) {
+            // --- Data Extraction ---
+            const poNumber = findValue(data, "Purchase Order No :", 3) || 'PO NOT FOUND';
+            if (poNumber === 'PO NOT FOUND') {
+                 throw new Error('Could not find "Purchase Order No :" in the file.');
+            }
+
+            const totalBoxesStr = findValue(data, "Total No of Boxes :", 2);
+            const totalBoxes = parseInt(totalBoxesStr || 0); 
+            
+            if (totalBoxes === 0 || isNaN(totalBoxes)) {
+                throw new Error(`Could not find a valid number for "Total No of Boxes :". (Found: "${totalBoxesStr}")`);
+            }
+
+            // --- Find the packing data table ---
+            let dataRowIndex = -1;
+            let sizeHeaderRow = null;
+            
+            for (let i = 0; i < data.length; i++) {
+                if(data[i] && data[i].includes('XS') && data[i].includes('S') && data[i].includes('M')) {
+                    sizeHeaderRow = data[i];
+                    dataRowIndex = i + 1;
+                    break;
+                }
+            }
+
+            if (dataRowIndex === -1 || !sizeHeaderRow) {
+                throw new Error('Could not find the packing data table. (Looking for size headers like "XS", "S", "M")');
+            }
+
+
+            // --- PDF Generation ---
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({
+                orientation: 'portrait', 
+                unit: 'in',
+                format: [4, 4] // 4x4 inch sticker
+            });
+
+            let currentCartonNumber = 1; 
+            
+            // --- FONT & SPACING SETTINGS (V17) ---
+            const stickerFontSize = 20; // Default font size
+            const leftMargin = 0.4;          
+            const valueStart_X = 1.7;        
+            const lineHeight = 0.4;          
+            let yPos = 0.5;                  
+            
+            // Set default font for all lines (20pt, BOLD)
+            doc.setFont('helvetica', 'bold'); 
+
+            // Helper function to draw a left-aligned, indented line (used for all lines *except* Size)
+            const drawLeftAlignedLine = (label, value) => {
+                doc.setFontSize(stickerFontSize); // Ensure 20pt is active
+                doc.text(`${label}:`, leftMargin, yPos);
+                doc.text(String(value || '').trim(), valueStart_X, yPos);
+                yPos += lineHeight;
+            };
+
+            for (let i = dataRowIndex; i < data.length; i++) {
+                const row = data[i];
+                if (!row) continue; 
+                const boxCount = parseInt(row[14]); // Col O: "Total Box"
+                
+                if (isNaN(boxCount) || boxCount === 0) {
+                    continue; 
+                }
+
+                // --- Data Columns ---
+                const style = row[3] || row[2] || 'N/A'; // Col D/C
+                const color = row[5] || 'N/A'; // Col F (Colour)
+                const quantityPerBox = row[13] || 'N/A'; // Col N (Pieces per Box)
+                
+                // Weight Logic (GW: Col S, NW: Col T)
+                const gw = row[18] || 'N/A'; // Col S (GW)
+                const nw = row[19] || 'N/A'; // Col T (NW)
+                
+                // --- Build Size String & Count ---
+                let sizeStrings = [];
+                for (let j = 6; j <= 12; j++) { // Cols G to M
+                    const quantity = parseInt(row[j] || 0);
+                    if (quantity > 0) {
+                        const sizeName = sizeHeaderRow[j] || 'SIZE?'; 
+                        sizeStrings.push(`${sizeName}(${quantity})`);
+                    }
+                }
+                const finalSizeString = sizeStrings.join(' / ') || 'N/A';
+                const sizeCount = sizeStrings.length;
+                // --- End Size Logic ---
+
+                for (let j = 0; j < boxCount; j++) {
+                    if (currentCartonNumber > totalBoxes) break; 
+
+                    if (currentCartonNumber > 1) {
+                        doc.addPage();
+                        doc.setFont('helvetica', 'bold'); // Re-set font style
+                    }
+
+                    // --- Draw the sticker ---
+                    yPos = 0.5; // Reset Y position for each new page
+                    
+                    // Draw Border
+                    doc.setLineWidth(0.005); 
+                    doc.rect(0.2, 0.2, 3.6, 3.6); 
+
+                    // PO#
+                    drawLeftAlignedLine('PO#', poNumber);
+
+                    // Color
+                    drawLeftAlignedLine('Color', color);
+
+                    // ------------------------------------
+                    // --- Dynamic Size Line Logic (V17) ---
+                    // ------------------------------------
+                    
+                    // 1. Draw the 'Size' label at the default 20pt.
+                    doc.setFontSize(stickerFontSize); 
+                    doc.text('Size:', leftMargin, yPos);
+
+                    // 2. Determine and set the dynamic font size for the value.
+                    let sizeFont = stickerFontSize; // Default 20pt
+                    if (sizeCount === 3) {
+                        sizeFont = 17;
+                    } else if (sizeCount === 4) {
+                        sizeFont = 13; // Smaller font for 4 sizes
+                    } else if (sizeCount >= 5) {
+                        sizeFont = 10; // Even smaller font for 5+ sizes
+                    }
+                    doc.setFontSize(sizeFont);
+
+                    // 3. Draw the Size value.
+                    doc.text(finalSizeString, valueStart_X, yPos);
+
+                    // 4. Advance Y position.
+                    yPos += lineHeight;
+
+                    // 5. Reset font size back to default 20pt for the rest of the sticker
+                    doc.setFontSize(stickerFontSize);
+                    
+                    // --- End Dynamic Size Line Logic ---
+                    
+                    // Quantity
+                    drawLeftAlignedLine('Quantity', `${quantityPerBox} PCS`);
+                    
+                    // Style
+                    drawLeftAlignedLine('Style', style);
+                    
+                    // Carton line
+                    drawLeftAlignedLine('Carton', `${currentCartonNumber} of ${totalBoxes}`);
+
+                    // G.W
+                    drawLeftAlignedLine('G.W', `${gw} KG`); 
+                    
+                    // N.W
+                    drawLeftAlignedLine('N.W', `${nw} KG`); 
+                    
+                    // Meas
+                    drawLeftAlignedLine('Meas', HARDCODED_MEASUREMENTS);
+
+                    currentCartonNumber++;
+                }
+            }
+
+            if (currentCartonNumber === 1) {
+                throw new Error("Data found, but 0 boxes were processed. Check the data table values.");
+            }
+
+            doc.save(`EDI2_Stickers_PO_${poNumber}.pdf`);
+        }
+    </script>
+
+</body>
+</html>
