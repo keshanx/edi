@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDI 1 Sticker Generator (v6)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: grid;
+            place-items: center;
+            min-height: 90vh;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        .container {
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 2rem 3rem;
+            width: 90%;
+            max-width: 500px;
+        }
+        h1 {
+            color: #1a535c;
+            text-align: center;
+            margin-top: 0;
+        }
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        input[type="file"], input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 1rem;
+        }
+        button {
+            width: 100%;
+            padding: 1rem;
+            background-color: #1a535c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #4ecdc4;
+        }
+        button:disabled {
+            background-color: #c4c4c4;
+            cursor: not-allowed;
+        }
+        #status {
+            text-align: center;
+            margin-top: 1rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>EDI 1 Sticker Generator</h1>
+        
+        <div class="input-group">
+            <label for="destinationInput">1. Destination (e.g., GERMANY)</label>
+            <input type="text" id="destinationInput" placeholder="Enter Destination Name" required>
+        </div>
+
+        <div class="input-group">
+            <label for="fileUpload">2. Upload Packing List (.csv or .xlsx)</label>
+            <input type="file" id="fileUpload" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+        </div>
+
+        <button id="generateBtn" disabled>Generate PDF Stickers</button>
+        <div id="status">Please complete all fields and select a file.</div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileUpload');
+        const destinationInput = document.getElementById('destinationInput');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusEl = document.getElementById('status');
+        
+        // --- Form Validation ---
+        const validateForm = () => {
+            const isFileSelected = fileInput.files.length > 0;
+            const isDestinationEntered = destinationInput.value.trim() !== '';
+            
+            generateBtn.disabled = !(isFileSelected && isDestinationEntered);
+            
+            if (!generateBtn.disabled) {
+                statusEl.textContent = 'Ready to generate.';
+            } else if (isFileSelected) {
+                statusEl.textContent = 'Please enter the Destination.';
+            } else {
+                statusEl.textContent = 'Please complete all fields and select a file.';
+            }
+        };
+
+        fileInput.addEventListener('change', validateForm);
+        destinationInput.addEventListener('input', validateForm);
+
+        // Run validation on load to set initial state
+        validateForm(); 
+        
+        // --- Data Helper Function to find key/value pairs (needed for PO/Box count) ---
+        function findValue(data, key, colOffset) {
+            for (let i = 0; i < data.length; i++) {
+                if (!data[i]) continue;
+                for (let j = 0; j < data[i].length; j++) {
+                    if (data[i][j] && data[i][j].toString().trim() === key.trim()) {
+                        return data[i][j + colOffset];
+                    }
+                }
+            }
+            return null;
+        }
+
+        // --- Main Generation Logic ---
+        generateBtn.addEventListener('click', () => {
+            const file = fileInput.files[0];
+            const destination = destinationInput.value.trim().toUpperCase();
+
+            if (!file || !destination) {
+                alert('Please complete all fields and select a file first.');
+                return;
+            }
+
+            statusEl.textContent = 'Processing file...';
+            const fileName = file.name.toLowerCase();
+
+            try {
+                const parseAndGenerate = (data) => {
+                    generateStickers(data, destination);
+                    statusEl.textContent = 'PDF Generated!';
+                };
+
+                if (fileName.endsWith('.csv')) {
+                    Papa.parse(file, {
+                        complete: (results) => parseAndGenerate(results.data),
+                        error: (err) => { throw new Error(err.message); }
+                    });
+
+                } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        // Using {header: 1} ensures a simple array of arrays where data[row][col] works
+                        const dataArray = XLSX.utils.sheet_to_json(worksheet, {header: 1});
+                        parseAndGenerate(dataArray);
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    throw new Error("Unsupported file type. Please upload a .csv, .xls, or .xlsx file.");
+                }
+
+            } catch (error) {
+                console.error("Critical Processing Error:", error);
+                statusEl.textContent = `Error: Could not generate PDF. ${error.message}`;
+                alert(`Could not process file. Error: ${error.message}`);
+            }
+        });
+
+        function generateStickers(data, destination) {
+            // --- Data Extraction ---
+            const poNumber = findValue(data, "Purchase Order No :", 3) || 'PO NOT FOUND';
+            if (poNumber === 'PO NOT FOUND') {
+                 throw new Error('Could not find "Purchase Order No :" in the file.');
+            }
+
+            const totalBoxesStr = findValue(data, "Total No of Boxes :", 2);
+            const totalBoxes = parseInt(totalBoxesStr || 0); 
+            
+            if (totalBoxes === 0 || isNaN(totalBoxes)) {
+                throw new Error(`Could not find a valid number for "Total No of Boxes :". (Found: "${totalBoxesStr}")`);
+            }
+
+            // Extract Shipping Code from F24 (row 23, column 5 in 0-indexed array)
+            if (data.length <= 23) {
+                 throw new Error(`Could not extract Shipping Code from F24. The data file only contains ${data.length} rows (it needs 24 rows). Please verify F24 is the correct location.`);
+            }
+
+            const row23 = data[23];
+            
+            if (!row23 || row23.length <= 5) {
+                throw new Error(`Could not extract Shipping Code from F24. Row 24 does not contain a value in column F (it only has ${row23 ? row23.length : 0} columns). Please verify F24 is the correct location.`);
+            }
+
+            const shippingCode = String(row23[5]).trim().toUpperCase();
+            
+            if (shippingCode === '') {
+                 throw new Error('Could not extract Shipping Code from F24. The cell was found but was empty. Please verify that F24 contains the code.');
+            }
+            // --- End Data Extraction ---
+
+
+            // --- PDF Generation ---
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({
+                orientation: 'portrait', 
+                unit: 'in',
+                format: [4, 4] // 4x4 inch sticker
+            });
+
+            let currentCartonNumber = 1; 
+            
+            // --- FONT & SPACING SETTINGS (V6) ---
+            const center_X = 2.0;            // Center of 4-inch page
+            const stickerFontSize = 20;
+            // Line height for standard single steps (e.g., CC to Dest, PO to Carton)
+            const standardLineStep = 0.4;     
+            
+            doc.setFontSize(stickerFontSize); 
+            doc.setFont('times', 'bold');    
+            doc.setLineWidth(0.005); 
+
+            // Helper function to draw a center-aligned line at a specified Y position
+            const drawCenterAlignedLine = (text, y) => {
+                doc.text(text, center_X, y, { align: 'center' });
+            };
+
+            for (let j = 0; j < totalBoxes; j++) {
+                if (currentCartonNumber > 1) {
+                    doc.addPage();
+                    doc.setFontSize(stickerFontSize); 
+                    doc.setFont('times', 'bold'); 
+                }
+
+                // 1. Draw Border
+                doc.rect(0.2, 0.2, 3.6, 3.6); 
+
+                // --- Vertical Placement (Centered) ---
+                
+                // Set the base Y position to 0.7 to center the block vertically (previously 0.6)
+                let y = 1.2; 
+                
+                // 1. Shipping Code (CC)
+                drawCenterAlignedLine(shippingCode, y);
+                y += standardLineStep; 
+
+                // 2. Destination (User Input)
+                drawCenterAlignedLine(destination, y);
+                
+                // Gap
+                y += standardLineStep * 1; 
+
+                // 3. PO NO:
+                drawCenterAlignedLine(`PO NO: ${poNumber}`, y);
+                y += standardLineStep; 
+                
+                // 4. CARTON NO:
+                drawCenterAlignedLine(`CARTON NO: ${currentCartonNumber} OF ${totalBoxes}`, y);
+                
+                // Gap
+                y += standardLineStep * 1; 
+                
+                // 5. MADE IN SRI LANKA
+                drawCenterAlignedLine('MADE IN SRI LANKA', y);
+
+                currentCartonNumber++;
+            }
+
+            doc.save(`EDI1_Stickers_PO_${poNumber}.pdf`);
+        }
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDI 3 Sticker Generator (v7 - Final Table Layout)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: grid;
+            place-items: center;
+            min-height: 90vh;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        .container {
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 2rem 3rem;
+            width: 90%;
+            max-width: 550px;
+        }
+        h1 {
+            color: #1a535c;
+            text-align: center;
+            margin-top: 0;
+        }
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 1rem;
+        }
+        button {
+            width: 100%;
+            padding: 1rem;
+            background-color: #1a535c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #4ecdc4;
+        }
+        button:disabled {
+            background-color: #c4c4c4;
+            cursor: not-allowed;
+        }
+        #status {
+            text-align: center;
+            margin-top: 1rem;
+            font-weight: 500;
+        }
+        .note {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background-color: #f0f8ff;
+            border: 1px solid #cceeff;
+            border-radius: 5px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>EDI 3 Sticker Generator (Pure Table)</h1>
+        
+        <div class="input-group">
+            <label for="fileUpload">1. Upload Itemized Packing List (.csv or .xlsx)</label>
+            <input type="file" id="fileUpload" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+        </div>
+
+        <button id="generateBtn" disabled>Generate PDF Stickers</button>
+        <div id="status">Please select a file to begin.</div>
+
+        <div class="note">
+            **Font Note:** The output uses the **Helvetica** font as a close, clean substitute for Calibri, ensuring readability on all devices.
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileUpload');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusEl = document.getElementById('status');
+        
+        // --- Form Validation ---
+        const validateForm = () => {
+            const isFileSelected = fileInput.files.length > 0;
+            generateBtn.disabled = !isFileSelected;
+            
+            statusEl.textContent = isFileSelected ? 'Ready to generate.' : 'Please select a file to begin.';
+        };
+
+        fileInput.addEventListener('change', validateForm);
+        validateForm(); 
+
+        // --- Core Item Extraction Logic (Horizontal Packing List) ---
+        function extractHorizontalCartons(data) {
+            const allCartonContents = {};
+            // Updated list based on the packing list file structure
+            const sizeHeaders = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']; 
+            let headerRowIndex = -1;
+            let colIndices = {};
+            let shipmentStyleDefault = '';
+            let shipmentColorDefault = '';
+
+            // 1. Find the header row and column indices
+            for (let i = 0; i < data.length; i++) {
+                const row = data[i];
+                if (!row || row.length < 10) continue; 
+                
+                const cell0 = String(row[0] || '').trim();
+                
+                // Find the main item table header
+                if (cell0 === 'Carton No') {
+                    headerRowIndex = i;
+                    
+                    // Identify column indices based on the found header row
+                    for (let j = 0; j < row.length; j++) {
+                        const header = String(row[j] || '').trim();
+                        if (header === 'Carton No') colIndices.cartonNo = j;
+                        // Search for 'Style' or a column header near it for the Item No
+                        if ((header === 'Style' || header === 'Style Number') && colIndices.style === undefined) colIndices.style = j; 
+                        if (header === 'Colour') colIndices.color = j;
+                        
+                        // Identify size columns
+                        const sizeIndex = sizeHeaders.indexOf(header);
+                        if (sizeIndex !== -1) {
+                            colIndices[sizeHeaders[sizeIndex]] = j;
+                        }
+                    }
+                    
+                    if (colIndices.cartonNo !== undefined && colIndices.color !== undefined) {
+                         break; 
+                    } else {
+                         headerRowIndex = -1; 
+                         colIndices = {};
+                    }
+                }
+            }
+            
+            if (headerRowIndex === -1) {
+                throw new Error('Could not find the item table header row starting with "Carton No" and containing the size columns.');
+            }
+
+            // 2. Iterate through data rows and extract items
+            for (let i = headerRowIndex + 1; i < data.length; i++) {
+                const row = data[i];
+                if (!row || row.length < colIndices.color) continue; 
+
+                const cartonNoRaw = String(row[colIndices.cartonNo] || '').trim();
+                const cartonNo = parseInt(cartonNoRaw);
+                
+                let currentStyle = String(row[colIndices.style] || '').trim();
+                let currentColor = String(row[colIndices.color] || '').trim();
+                
+                if (currentStyle !== '' && currentStyle !== 'NaN') { shipmentStyleDefault = currentStyle; }
+                if (currentColor !== '' && currentColor !== 'NaN') { shipmentColorDefault = currentColor; }
+                
+                let style = currentStyle || shipmentStyleDefault;
+                let color = currentColor || shipmentColorDefault;
+
+
+                if (isNaN(cartonNo) || cartonNo < 1 || style === '' || color === '' || style === 'NaN' || color === 'NaN') {
+                    continue; 
+                }
+                
+                if (!allCartonContents[cartonNo]) {
+                    allCartonContents[cartonNo] = [];
+                }
+
+                // Iterate through all size columns to find quantities
+                for (const size of sizeHeaders) {
+                    const colIndex = colIndices[size];
+                    if (colIndex !== undefined) {
+                        const qtyRaw = String(row[colIndex] || '').trim();
+                        const qty = parseInt(qtyRaw) || 0; 
+                        
+                        if (qty > 0) {
+                            allCartonContents[cartonNo].push({
+                                style: style, // This is the Item No
+                                color: color,
+                                size: size,
+                                qty: qty
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // 3. Convert object into a clean array indexed by carton number
+            const finalCartonList = [];
+            const sortedCartonNumbers = Object.keys(allCartonContents).map(Number).sort((a, b) => a - b);
+            
+            for (const number of sortedCartonNumbers) {
+                // Remove duplicate items, keep last one (in case of merged cells issue)
+                const uniqueItems = {};
+                allCartonContents[number].forEach(item => {
+                    const key = `${item.style}-${item.color}-${item.size}`;
+                    uniqueItems[key] = item;
+                });
+                
+                const finalItems = Object.values(uniqueItems);
+                
+                if (finalItems.length > 0) {
+                    finalCartonList.push({
+                        cartonNo: number,
+                        items: finalItems
+                    });
+                }
+            }
+
+            return finalCartonList;
+        }
+
+        // --- Main Generation Logic ---
+        generateBtn.addEventListener('click', () => {
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('Please select a file first.');
+                return;
+            }
+
+            statusEl.textContent = 'Processing file...';
+            const fileName = file.name.toLowerCase();
+
+            try {
+                const parseAndGenerate = (data) => {
+                    generateStickers(data);
+                    statusEl.textContent = 'PDF Generated! Download should start shortly.';
+                };
+
+                if (fileName.endsWith('.csv')) {
+                    Papa.parse(file, {
+                        complete: (results) => parseAndGenerate(results.data),
+                        error: (err) => { throw new Error(err.message); }
+                    });
+
+                } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        // Try to find the 'Packing List' sheet first, otherwise use the first sheet
+                        const sheetName = 'Packing List' 
+                        const worksheet = workbook.Sheets[sheetName] || workbook.Sheets[workbook.SheetNames[0]];
+
+                        if (!worksheet) {
+                            throw new Error(`Could not find a valid worksheet to read data from.`);
+                        }
+                        
+                        const dataArray = XLSX.utils.sheet_to_json(worksheet, {header: 1});
+                        parseAndGenerate(dataArray);
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    throw new Error("Unsupported file type. Please upload a .csv, .xls, or .xlsx file.");
+                }
+
+            } catch (error) {
+                console.error("Critical Processing Error:", error);
+                statusEl.textContent = `Error: Could not generate PDF. ${error.message}`;
+                alert(`Could not process file. Error: ${error.message}`);
+            }
+        });
+
+        function generateStickers(data) {
+            
+            // --- Itemized Content Extraction ---
+            const allCartonContents = extractHorizontalCartons(data);
+
+            if (allCartonContents.length === 0) {
+                throw new Error('Could not find any itemized carton blocks with positive quantity in the file.');
+            }
+            
+            const poNumber = 'EDI3_Label'; 
+            
+            // --- PDF Generation ---
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({
+                orientation: 'portrait', 
+                unit: 'in',
+                format: [4, 4] // 4x4 inch sticker size
+            });
+
+            // --- FONT & SPACING SETTINGS ---
+            const itemHeaderFontSize = 14;
+            const itemFontSize = 14;         
+            const itemRowHeight = 0.30; 
+            const maxItemLines = 11; // Max fit on a 4x4 sticker
+            
+            // --- Column X Coordinates for Grid Lines ---
+            const x_start = 0.2;
+            const x_item_end = 1.6;         // Ends Item No column
+            const x_color_end = 2.5;        // Ends Color column
+            const x_size_end = 3.1;         // Ends Size column
+            const x_end = 3.8;              // Ends Qty column
+            
+            // --- Text Alignment X Coordinates (Center of the cell) ---
+            const x_item_txt = 0.25;                                    // Left-aligned
+            const x_color_txt = (x_item_end + x_color_end) / 2;         // Center-aligned
+            const x_size_txt = (x_color_end + x_size_end) / 2;          // Center-aligned
+            const x_qty_txt = (x_size_end + x_end) / 2;                 // Center-aligned
+
+            // Helper function to draw the item table line
+            const drawItemTableLine = (itemNo, color, size, qty, y, printStyleColor) => {
+                // Using 'helvetica' as a clean sans-serif substitute for Calibri
+                doc.setFontSize(itemFontSize);
+                doc.setFont('helvetica', 'normal'); 
+
+                // Print Item No (Conditional, Left Align)
+                if (printStyleColor) {
+                    doc.text(String(itemNo).trim().substring(0, 15), x_item_txt, y, { align: 'left' }); 
+                    // Print Color (Conditional, Center Align)
+                    doc.text(String(color).trim().substring(0, 10), x_color_txt, y, { align: 'center' });
+                }
+                
+                // Print Size (Center Align)
+                doc.text(String(size).trim().substring(0, 5), x_size_txt, y, { align: 'center' });
+                // Print Qty (Center Align)
+                doc.text(String(qty), x_qty_txt, y, { align: 'center' }); 
+            };
+
+            allCartonContents.forEach((carton, index) => {
+                const cartonItems = carton.items;
+                const currentCartonNumber = carton.cartonNo; 
+
+                if (index > 0) {
+                    doc.addPage();
+                }
+
+                doc.setLineWidth(0.015); // Bolder lines for clear borders
+                
+                // *** 1. Sort items for correct Item No/Color grouping ***
+                const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+                cartonItems.sort((a, b) => {
+                    if (a.style < b.style) return -1;
+                    if (a.style > b.style) return 1;
+                    if (a.color < b.color) return -1;
+                    if (a.color > b.color) return 1;
+                    return sizeOrder.indexOf(a.size) - sizeOrder.indexOf(b.size);
+                });
+
+                // --- Table Dimensions ---
+                const table_start_y = 0.2;
+                let current_y = table_start_y;
+                
+                // Determine the total height based on the items present
+                const totalItemsToPrint = Math.min(cartonItems.length, maxItemLines);
+                const total_table_height = (itemRowHeight * (totalItemsToPrint + 1));
+                const table_body_end_y = table_start_y + total_table_height;
+
+                // Ensure the box drawing doesn't go off the sticker
+                const final_box_height = Math.min(table_body_end_y, 3.8);
+                const table_body_limit_y = final_box_height;
+                
+                // 1. Draw Outer Border (Rectangle)
+                doc.rect(x_start, table_start_y, x_end - x_start, table_body_limit_y - table_start_y); 
+                
+                // --- Header Section ---
+                current_y += itemRowHeight * 0.6; // Position text in the cell
+                const y_header_line = table_start_y + itemRowHeight;
+
+                // Header Text (Only first letter capitalized)
+                doc.setFontSize(itemHeaderFontSize); 
+                doc.setFont('helvetica');
+                doc.text('Item no', x_item_txt, current_y, { align: 'left' });
+                doc.text('Color', x_color_txt, current_y, { align: 'center' });
+                doc.text('Size', x_size_txt, current_y, { align: 'center' });
+                doc.text('Qty', x_qty_txt, current_y, { align: 'center' }); 
+
+                // Draw horizontal line below header
+                doc.line(x_start, y_header_line, x_end, y_header_line); 
+                
+                // --- Item Detail Section ---
+                current_y = y_header_line + itemRowHeight * 0.6; 
+                
+                let lastPrintedItemNo = null;
+                let lastPrintedColor = null;
+                let last_y_line = y_header_line;
+
+                const itemsToPrint = cartonItems.slice(0, maxItemLines);
+                
+                itemsToPrint.forEach(item => {
+                    // Check if Item No or Color has changed
+                    const printItemNoColor = (item.style !== lastPrintedItemNo || item.color !== lastPrintedColor);
+                    
+                    // Draw Item Text
+                    drawItemTableLine(item.style, item.color, item.size, item.qty, current_y, printItemNoColor);
+                    
+                    // Draw horizontal line below the item row
+                    last_y_line = current_y + itemRowHeight * 0.4; // Position of the next line
+                    doc.line(x_start, last_y_line, x_end, last_y_line);
+                    
+                    current_y += itemRowHeight;
+
+                    // Update tracking variables
+                    if (printItemNoColor) {
+                        lastPrintedItemNo = item.style;
+                        lastPrintedColor = item.color;
+                    }
+                });
+
+                // --- Draw Vertical Separator Lines for the Grid ---
+                const vertical_line_end_y = last_y_line; 
+
+                // Draw vertical lines from the top of the table to the bottom of the last item row
+                doc.line(x_item_end, table_start_y, x_item_end, vertical_line_end_y);
+                doc.line(x_color_end, table_start_y, x_color_end, vertical_line_end_y);
+                doc.line(x_size_end, table_start_y, x_size_end, vertical_line_end_y);
+                
+                // Add a small note at the bottom if items were truncated
+                if (cartonItems.length > maxItemLines) {
+                    doc.setFontSize(8);
+                    doc.setFont('helvetica', 'italic');
+                    doc.text(`... and ${cartonItems.length - maxItemLines} more lines are truncated.`, x_start, table_body_limit_y + 0.1, { align: 'left' });
+                }
+            });
+
+            doc.save(`EDI3_Stickers_${poNumber}.pdf`);
+        }
+    </script>
+
+</body>
+</html>
