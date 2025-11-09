@@ -1,0 +1,20 @@
+{
+  "rewrites": [
+    {
+      "source": "/edi1",
+      "destination": "/edi1/index.html"
+    },
+    {
+      "source": "/edi2",
+      "destination": "/edi2/index.html"
+    },
+    {
+      "source": "/edi3",
+      "destination": "/edi3/index.html"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ]
+}
