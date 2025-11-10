@@ -115,10 +115,10 @@
         fileInput.addEventListener('change', validateForm);
         destinationInput.addEventListener('input', validateForm);
 
-        // Run validation on load to set initial state
+
         validateForm(); 
         
-        // --- Data Helper Function to find key/value pairs (needed for PO/Box count) ---
+
         function findValue(data, key, colOffset) {
             for (let i = 0; i < data.length; i++) {
                 if (!data[i]) continue;
@@ -163,7 +163,7 @@
                         const workbook = XLSX.read(data, {type: 'array'});
                         const firstSheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[firstSheetName];
-                        // Using {header: 1} ensures a simple array of arrays where data[row][col] works
+                        
                         const dataArray = XLSX.utils.sheet_to_json(worksheet, {header: 1});
                         parseAndGenerate(dataArray);
                     };
@@ -180,7 +180,7 @@
         });
 
         function generateStickers(data, destination) {
-            // --- Data Extraction ---
+          
             const poNumber = findValue(data, "Purchase Order No :", 3) || 'PO NOT FOUND';
             if (poNumber === 'PO NOT FOUND') {
                  throw new Error('Could not find "Purchase Order No :" in the file.');
@@ -193,7 +193,6 @@
                 throw new Error(`Could not find a valid number for "Total No of Boxes :". (Found: "${totalBoxesStr}")`);
             }
 
-            // Extract Shipping Code from F24 (row 23, column 5 in 0-indexed array)
             if (data.length <= 23) {
                  throw new Error(`Could not extract Shipping Code from F24. The data file only contains ${data.length} rows (it needs 24 rows). Please verify F24 is the correct location.`);
             }
@@ -209,15 +208,12 @@
             if (shippingCode === '') {
                  throw new Error('Could not extract Shipping Code from F24. The cell was found but was empty. Please verify that F24 contains the code.');
             }
-            // --- End Data Extraction ---
-
-
-            // --- PDF Generation ---
+            
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({
                 orientation: 'portrait', 
                 unit: 'in',
-                format: [4, 4] // 4x4 inch sticker
+                format: [4, 4] 
             });
 
             let currentCartonNumber = 1; 
@@ -232,7 +228,7 @@
             doc.setFont('times', 'bold');    
             doc.setLineWidth(0.005); 
 
-            // Helper function to draw a center-aligned line at a specified Y position
+   
             const drawCenterAlignedLine = (text, y) => {
                 doc.text(text, center_X, y, { align: 'center' });
             };
@@ -249,7 +245,7 @@
 
                 // --- Vertical Placement (Centered) ---
                 
-                // Set the base Y position to 0.7 to center the block vertically (previously 0.6)
+               
                 let y = 1.2; 
                 
                 // 1. Shipping Code (CC)
