@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EDI 2 Sticker Generator (v17)</title>
+    <title>EDI 2 Sticker Generator (v20 - Fixed)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -158,21 +158,25 @@
             return null;
         }
 
+        function formatWeight(value) {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            const num = parseFloat(value);
+            if (isNaN(num)) return 'N/A';
+            return num.toFixed(2);
+        }
+
         function generateStickers(data) {
-            // --- Data Extraction ---
             const poNumber = findValue(data, "Purchase Order No :", 3) || 'PO NOT FOUND';
             if (poNumber === 'PO NOT FOUND') {
                  throw new Error('Could not find "Purchase Order No :" in the file.');
             }
 
             const totalBoxesStr = findValue(data, "Total No of Boxes :", 2);
-            const totalBoxes = parseInt(totalBoxesStr || 0); 
+            const totalBoxes = parseInt(totalBoxesStr || 0);  
             
             if (totalBoxes === 0 || isNaN(totalBoxes)) {
                 throw new Error(`Could not find a valid number for "Total No of Boxes :". (Found: "${totalBoxesStr}")`);
             }
-
-            // --- Find the packing data table ---
             let dataRowIndex = -1;
             let sizeHeaderRow = null;
             
@@ -189,29 +193,25 @@
             }
 
 
-            // --- PDF Generation ---
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({
-                orientation: 'portrait', 
+                orientation: 'portrait',  
                 unit: 'in',
-                format: [4, 4] // 4x4 inch sticker
+                format: [4, 4] 
             });
 
-            let currentCartonNumber = 1; 
+            let currentCartonNumber = 1;  
+            const stickerFontSize = 20; 
+            const leftMargin = 0.4;         
+            const valueStart_X = 1.7;         
+            const lineHeight = 0.4;         
+            let yPos = 0.5;               
             
-            // --- FONT & SPACING SETTINGS (V17) ---
-            const stickerFontSize = 20; // Default font size
-            const leftMargin = 0.4;          
-            const valueStart_X = 1.7;        
-            const lineHeight = 0.4;          
-            let yPos = 0.5;                  
-            
-            // Set default font for all lines (20pt, BOLD)
-            doc.setFont('helvetica', 'bold'); 
+            doc.setFont('helvetica', 'bold');  
 
-            // Helper function to draw a left-aligned, indented line (used for all lines *except* Size)
+            
             const drawLeftAlignedLine = (label, value) => {
-                doc.setFontSize(stickerFontSize); // Ensure 20pt is active
+                doc.setFontSize(stickerFontSize); 
                 doc.text(`${label}:`, leftMargin, yPos);
                 doc.text(String(value || '').trim(), valueStart_X, yPos);
                 yPos += lineHeight;
@@ -219,102 +219,93 @@
 
             for (let i = dataRowIndex; i < data.length; i++) {
                 const row = data[i];
-                if (!row) continue; 
-                const boxCount = parseInt(row[14]); // Col O: "Total Box"
+                if (!row) continue;  
+                const boxCount = parseInt(row[14]); 
                 
                 if (isNaN(boxCount) || boxCount === 0) {
-                    continue; 
+                    continue;  
                 }
 
                 // --- Data Columns ---
-                const style = row[3] || row[2] || 'N/A'; // Col D/C
-                const color = row[5] || 'N/A'; // Col F (Colour)
-                const quantityPerBox = row[13] || 'N/A'; // Col N (Pieces per Box)
+                const style = row[2] || row[3] || 'N/A'; 
+                const color = row[5] || 'N/A'; 
+                const quantityPerBox = row[13] || 'N/A'; 
                 
-                // Weight Logic (GW: Col S, NW: Col T)
-                const gw = row[18] || 'N/A'; // Col S (GW)
-                const nw = row[19] || 'N/A'; // Col T (NW)
+                // Weight Logic
+                const gw = formatWeight(row[20]); 
+                const nw = formatWeight(row[19]); 
                 
-                // --- Build Size String & Count ---
                 let sizeStrings = [];
-                for (let j = 6; j <= 12; j++) { // Cols G to M
+                for (let j = 6; j <= 12; j++) { 
                     const quantity = parseInt(row[j] || 0);
                     if (quantity > 0) {
-                        const sizeName = sizeHeaderRow[j] || 'SIZE?'; 
+                        const sizeName = sizeHeaderRow[j] || 'SIZE?';  
                         sizeStrings.push(`${sizeName}(${quantity})`);
                     }
                 }
                 const finalSizeString = sizeStrings.join(' / ') || 'N/A';
                 const sizeCount = sizeStrings.length;
-                // --- End Size Logic ---
+
 
                 for (let j = 0; j < boxCount; j++) {
-                    if (currentCartonNumber > totalBoxes) break; 
+                    if (currentCartonNumber > totalBoxes) break;  
 
                     if (currentCartonNumber > 1) {
                         doc.addPage();
-                        doc.setFont('helvetica', 'bold'); // Re-set font style
+                        doc.setFont('helvetica', 'bold'); 
                     }
 
-                    // --- Draw the sticker ---
-                    yPos = 0.5; // Reset Y position for each new page
+                    yPos = 0.5; 
                     
-                    // Draw Border
-                    doc.setLineWidth(0.005); 
-                    doc.rect(0.2, 0.2, 3.6, 3.6); 
+                
+                    doc.setLineWidth(0.005);  
+                    doc.rect(0.2, 0.2, 3.6, 3.6);  
 
-                    // PO#
+                   
                     drawLeftAlignedLine('PO#', poNumber);
 
-                    // Color
-                    drawLeftAlignedLine('Color', color);
-
-                    // ------------------------------------
-                    // --- Dynamic Size Line Logic (V17) ---
-                    // ------------------------------------
                     
-                    // 1. Draw the 'Size' label at the default 20pt.
-                    doc.setFontSize(stickerFontSize); 
+                    doc.setFontSize(stickerFontSize);  
+                    doc.text('Color:', leftMargin, yPos);
+
+                    
+                    let colorFont = stickerFontSize; 
+                    if (color.length > 15) {
+                        colorFont = 14; 
+                    } else if (color.length > 10) {
+                        colorFont = 17; 
+                    }
+                    doc.setFontSize(colorFont);
+                    doc.text(color, valueStart_X, yPos);
+                    yPos += lineHeight;
+
+                    
+                    doc.setFontSize(stickerFontSize);
+                    
+                   
+                    
+                   
+                    doc.setFontSize(stickerFontSize);  
                     doc.text('Size:', leftMargin, yPos);
 
-                    // 2. Determine and set the dynamic font size for the value.
-                    let sizeFont = stickerFontSize; // Default 20pt
+                    
+                    let sizeFont = stickerFontSize; 
                     if (sizeCount === 3) {
                         sizeFont = 17;
                     } else if (sizeCount === 4) {
-                        sizeFont = 13; // Smaller font for 4 sizes
+                        sizeFont = 13; 
                     } else if (sizeCount >= 5) {
-                        sizeFont = 10; // Even smaller font for 5+ sizes
+                        sizeFont = 10; 
                     }
                     doc.setFontSize(sizeFont);
-
-                    // 3. Draw the Size value.
                     doc.text(finalSizeString, valueStart_X, yPos);
-
-                    // 4. Advance Y position.
                     yPos += lineHeight;
-
-                    // 5. Reset font size back to default 20pt for the rest of the sticker
                     doc.setFontSize(stickerFontSize);
-                    
-                    // --- End Dynamic Size Line Logic ---
-                    
-                    // Quantity
                     drawLeftAlignedLine('Quantity', `${quantityPerBox} PCS`);
-                    
-                    // Style
                     drawLeftAlignedLine('Style', style);
-                    
-                    // Carton line
                     drawLeftAlignedLine('Carton', `${currentCartonNumber} of ${totalBoxes}`);
-
-                    // G.W
-                    drawLeftAlignedLine('G.W', `${gw} KG`); 
-                    
-                    // N.W
-                    drawLeftAlignedLine('N.W', `${nw} KG`); 
-                    
-                    // Meas
+                    drawLeftAlignedLine('G.W', `${gw} KG`);  
+                    drawLeftAlignedLine('N.W', `${nw} KG`);  
                     drawLeftAlignedLine('Meas', HARDCODED_MEASUREMENTS);
 
                     currentCartonNumber++;
